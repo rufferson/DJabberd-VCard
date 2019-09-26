@@ -6,7 +6,7 @@ use DBI;
 
 our $logger = DJabberd::Log->get_logger();
 
-sub set_config_storage {
+sub set_config_database {
     my ($self, $dbfile) = @_;
     $self->{dbfile} = $dbfile;
 }
@@ -27,27 +27,27 @@ sub finalize {
 
 
 sub load_vcard {
-    my ($self, $user) = @_;
-
-    my $vcard = $self->{dbh}->selectrow_hashref("SELECT * FROM vcard WHERE jid=?",
-                                         undef, $user);
-
-
-    return unless $vcard;
-    return $vcard->{vcard};
+    my ($self, $user, $cb) = @_;
+    Danga::Socket->AddTimer(0, sub {
+        eval {
+            my $vcard = $self->{dbh}->selectrow_hashref("SELECT * FROM vcard WHERE jid=?", undef, $user);
+            return $cb->(($vcard && ref($vcard))?$vcard->{vcard} : undef);
+        };
+        return $cb->() if($@);
+    });
 }
 
 sub store_vcard {
-    my ($self, $user, $vcard) = @_;
+    my ($self, $user, $vcard, $cb) = @_;
 
-    my $exists = $self->load_vcard($user);
-
-    if($exists) {
-        $self->{dbh}->do("UPDATE vcard SET vcard = ? WHERE jid = ?", undef, $vcard->as_xml, $user);
-    } else {
-        $self->{dbh}->do("INSERT INTO vcard (vcard, jid) VALUES (?,?)", undef, $vcard->as_xml, $user);
-    }
-
+    Danga::Socket->AddTimer(0, sub {
+        eval {
+            if($self->{dbh}->do("UPDATE vcard SET vcard = ? WHERE jid = ?", undef, $vcard->as_xml, $user)==0) {
+                $self->{dbh}->do("INSERT INTO vcard (vcard, jid) VALUES (?,?)", undef, $vcard->as_xml, $user);
+            }
+        };
+        $cb->($@);
+    });
 }
 
 sub check_install_schema {

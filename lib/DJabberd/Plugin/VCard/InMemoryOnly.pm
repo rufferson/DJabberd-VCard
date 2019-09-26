@@ -3,24 +3,20 @@ package DJabberd::Plugin::VCard::InMemoryOnly;
 use strict;
 use base 'DJabberd::Plugin::VCard';
 use warnings;
-use DBI;
 
 our $logger = DJabberd::Log->get_logger();
 
 sub load_vcard {
-    my ($self, $user) = @_;
+    my ($self, $user, $cb) = @_;
     $self->{vcards} ||= {};
-    if (exists $self->{vcards}{$user}) {
-        return $self->{vcards}{$user};
-    } else {
-        return undef;
-    }
+    $cb->($self->{vcards}{$user});
 }
 
 sub store_vcard {
-    my ($self, $user, $vcard) = @_;
+    my ($self, $user, $vcard, $cb) = @_;
     $self->{vcards} ||= {};
     $self->{vcards}{$user} = $vcard->as_xml;
+    $cb->();
 }
 
 1;
