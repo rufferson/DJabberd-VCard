@@ -30,7 +30,7 @@ sub load_vcard {
     my ($self, $user, $cb) = @_;
     Danga::Socket->AddTimer(0, sub {
         eval {
-            my $vcard = $self->{dbh}->selectrow_hashref("SELECT * FROM vcard WHERE jid=?", undef, $user);
+            my $vcard = $self->{dbh}->selectrow_hashref("SELECT * FROM vcard WHERE jid=?", undef, $user->as_bare_string);
             return $cb->(($vcard && ref($vcard))?$vcard->{vcard} : undef);
         };
         return $cb->() if($@);
@@ -38,8 +38,9 @@ sub load_vcard {
 }
 
 sub store_vcard {
-    my ($self, $user, $vcard, $cb) = @_;
+    my ($self, $jid, $vcard, $cb) = @_;
 
+    my $user = $jid->as_bare_string;
     Danga::Socket->AddTimer(0, sub {
         eval {
             if($self->{dbh}->do("UPDATE vcard SET vcard = ? WHERE jid = ?", undef, $vcard->as_xml, $user)==0) {

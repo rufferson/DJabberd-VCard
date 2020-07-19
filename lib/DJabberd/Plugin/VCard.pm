@@ -58,10 +58,10 @@ sub get_vcard {
     my ($self, $vhost, $iq) = @_;
     my $user;
     if ($iq->to) {
-        $user = $iq->to_jid->as_bare_string;
+        $user = $iq->to_jid;
     } else {
         # user is requesting their own vCard
-        $user = $iq->connection->bound_jid->as_bare_string;
+        $user = $iq->connection->bound_jid;
     }
     $logger->info("Getting vcard for user '$user'");
     # Just make it a lil' less synchronous
@@ -97,7 +97,7 @@ sub set_vcard {
     my ($self, $vhost, $iq) = @_;
 
     my $vcard = $iq->first_element();
-    my $user  = $iq->connection->bound_jid->as_bare_string;
+    my $user  = $iq->connection->bound_jid;
     $self->store_vcard($user, $vcard, sub {
         if(@_ && $_[0]) {
             $logger->info("Failed setting vcard for user '$user': ".$_[0]);
