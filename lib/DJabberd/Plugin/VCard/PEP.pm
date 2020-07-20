@@ -12,6 +12,7 @@ use Digest::SHA;
 
 use constant AVAMD => 'urn:xmpp:avatar:metadata';
 use constant AVABD => 'urn:xmpp:avatar:data';
+use constant AVAUP => 'vcard-temp:x:update';
 use constant CNVNS => 'urn:xmpp:pep-vcard-conversion:0';
 
 our $logger = DJabberd::Log->get_logger(__PACKAGE__);
@@ -20,13 +21,23 @@ sub register {
     my $vhost = shift;
     $self->{vh} = $vhost;
     $self->{xp} = XML::LibXML->new(no_network => 1, validation => 0);
-    # Wait a minute, how bout presence ava injection??/!11 TODO XXX FIXME
     $vhost->register_hook("DiscoBare", sub {
 	my ($vh,$cb,$iq,$disco,$bare,$from,$ri) = @_;
 	if($disco eq 'info' && $ri && ref($ri) && $ri->subscription->{from}) {
 	    return $cb->addFeatures(CNVNS);
 	}
 	$cb->decline;
+    });
+    $vhost->register_hook("AlterPresenceAvailable", sub {
+	my ($vh, $cb, $conn, $pres) = @_;
+	my %meta = $self->load_meta($conn->bound_jid);
+	if(%meta && $meta{id}) {
+	    $pres->push_child(DJabberd::XMLElement->new(AVAUP, 'x', {'{}xmlns'=>AVAUP},
+		[
+		    DJabberd::XMLElement->new(undef, 'photo', {}, [$meta{id}]),
+		]));
+	}
+	$cb->done();
     });
     $self->SUPER::register($vhost);
 }
@@ -45,7 +56,33 @@ sub pepper {
     return $self->{pep};
 }
 
-use Data::Dumper;
+sub load_meta {
+    my ($self, $user) = @_;
+    return () unless($self->pepper);
+    my $vm_ev = $self->{pep}->get_pub_last($user, AVAMD);
+    if($vm_ev) {
+	my %info;
+	my ($evt) = grep{$_->element eq '{'.DJabberd::Plugin::PEP::PUBSUBNS.'#event}event'}$vm_ev->children_elements;
+	$logger->debug("Retrieved MD item: ".$evt->as_xml);
+
+	if(@{$evt->first_element->first_element->{children}}) {
+	    # Payload is not serialized, just take it: event / items / item / metadata / info
+	    my ($info) = grep{$_->element_name eq 'info' && $_->attr('{}type') eq 'image/png'}$evt->first_element->first_element->first_element->children_elements;
+	    %info = ( id => $info->attr('{}id'), bytes => $info->attr('{}bytes') )
+		    if($info);
+	} else {
+	    # This looks stupid (serialize in pep, deserialize here) but it has its merrits
+	    my $meta;
+	    my $mraw = $evt->first_element->first_element->innards_as_xml; # event/items/item/raw
+	    eval {
+	        ($meta) = grep{$_->nodeName eq 'info' && $_->{type} eq 'image/png'}$self->{xp}->parse_balanced_chunk($mraw)->firstChild->childNodes;
+	    };
+	    %info = map{($_->nodeName => $_->value)}$meta->attributes if($meta);
+	}
+	return %info;
+    }
+    return ();
+}
 
 sub load_vcard {
     my ($self, $user, $cb) = @_;
@@ -53,38 +90,22 @@ sub load_vcard {
     # I mean - no reason to go async right now
     $logger->info("Loading VCard from PEP");
     if($self->pepper) {
-        my $vm_ev = $self->{pep}->get_pub_last($user, AVAMD);
-	if($vm_ev) {
-	    my ($evt) = grep{$_->element eq '{'.DJabberd::Plugin::PEP::PUBSUBNS.'#event}event'}$vm_ev->children_elements;
-	    my ($meta,$data);
-	    $logger->debug("Retrieved MD item: ".$evt->as_xml);
-	    my %info;
-	    if(@{$evt->first_element->first_element->{children}}) {
-		# Payload is not serialized, just take it: event / items / item / metadata / info
-		my($info) = grep{$_->element_name eq 'info' && $_->attr('{}type') eq 'image/png'}$evt->first_element->first_element->first_element->children_elements;
-		%info = ( id => $info->attr('{}id'), bytes => $info->attr('{}bytes') )
-		    if($info);
-	    } else {
-	        # This looks stupid (serialize in pep, deserialize here) but it has its merrits
-	    	my $mraw = $evt->first_element->first_element->innards_as_xml; # event/items/item/raw
-		eval {
-	           ($meta) = grep{$_->nodeName eq 'info' && $_->{type} eq 'image/png'}$self->{xp}->parse_balanced_chunk($mraw)->firstChild->childNodes;
-	    	};
-		%info = map{($_->nodeName => $_->value)}$meta->attributes if($meta);
-	    }
+	my %info = $self->load_meta($user);
+	if(%info) {
 	    my $vd_ev = $self->{pep}->get_pub_last($user, AVABD);
-	    unless($vd_ev && %info) {
+	    unless($vd_ev) {
 		$logger->debug("No data or usable metadata found");
 		return $cb->();
 	    }
-	    ($evt) = grep{$_->element eq '{'.DJabberd::Plugin::PEP::PUBSUBNS.'#event}event'}$vd_ev->children_elements;
-	    my $mraw = $evt->first_element->first_element->innards_as_xml; # event/items/item/raw
-	    if($mraw) {
+	    my ($evt) = grep{$_->element eq '{'.DJabberd::Plugin::PEP::PUBSUBNS.'#event}event'}$vd_ev->children_elements;
+	    my $draw = $evt->first_element->first_element->innards_as_xml; # event/items/item/raw
+	    my $data;
+	    if($draw) {
 		eval {
-	           ($data) = grep{$_->nodeName eq 'data' && $_->{xmlns} eq AVABD}$self->{xp}->parse_balanced_chunk($mraw)->firstChild;
+	           ($data) = grep{$_->nodeName eq 'data' && $_->{xmlns} eq AVABD}$self->{xp}->parse_balanced_chunk($draw)->firstChild;
 	    	};
 	    }
-	    if(ref($data) && %info) {
+	    if(ref($data)) {
 		my $vcard = DJabberd::XMLElement->new('vcard-temp', 'vCard', {'{}xmlns'=>'vcard-temp'}, [
 			DJabberd::XMLElement->new(undef,'TYPE',{},[$info{type}]),
 			DJabberd::XMLElement->new(undef,'BINVAL',{},[$data->textContent]),

@@ -2,7 +2,7 @@
 
 
 use strict;
-use Test::More tests => 19;
+use Test::More tests => 21;
 use lib 't/lib';
 BEGIN { require 'djabberd-test.pl' }
 
@@ -104,6 +104,9 @@ sub run_tests {
         $xml = $pb->recv_xml;
         like($xml, qr{Test User}, "Got the vcard back to user pb from pa");
 
+        $pa->send_xml("<presence to='$pb/$e_pb_res'/>");
+        $xml = $pb->recv_xml;
+	like($xml, qr{vcard-temp:x:update}, "Got altered presence");
     # some clients send iqs before presence, they should get responses even when they are unavailable
 
         $pa->send_xml("<presence type='unavailable'/>");
