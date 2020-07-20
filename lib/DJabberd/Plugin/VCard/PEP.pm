@@ -19,11 +19,16 @@ sub register {
     my $self = shift;
     my $vhost = shift;
     $self->{vh} = $vhost;
-    push(@DJabberd::Plugin::VCard::feats, CNVNS);
-    $self->SUPER::register($vhost);
     $self->{xp} = XML::LibXML->new(no_network => 1, validation => 0);
     # Wait a minute, how bout presence ava injection??/!11 TODO XXX FIXME
-    $logger->info("Loading VCard from PEP");
+    $vhost->register_hook("DiscoBare", sub {
+	my ($vh,$cb,$iq,$disco,$bare,$from,$ri) = @_;
+	if($disco eq 'info' && $ri && ref($ri) && $ri->subscription->{from}) {
+	    return $cb->addFeatures(CNVNS);
+	}
+	$cb->decline;
+    });
+    $self->SUPER::register($vhost);
 }
 
 sub vhost { $_[0]->{vh} }

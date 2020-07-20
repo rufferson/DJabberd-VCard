@@ -2,7 +2,7 @@
 
 
 use strict;
-use Test::More tests => 17;
+use Test::More tests => 19;
 use lib 't/lib';
 BEGIN { require 'djabberd-test.pl' }
 
@@ -43,6 +43,14 @@ sub run_tests {
   <query xmlns='http://jabber.org/protocol/disco#info'/>
 </iq>");
         like($pa->recv_xml, qr{vcard-temp}, "vcard");
+
+        $pa->send_xml("<iq type='get'
+    from='$pa/$e_pa_res'
+    to='" . $pa . "'
+    id='info1'>
+  <query xmlns='http://jabber.org/protocol/disco#info'/>
+</iq>");
+        like($pa->recv_xml, qr{urn:xmpp:pep-vcard-conversion:0}, "pep-vcard-conv disco bare");
 
 
         $pa->send_xml("<iq
