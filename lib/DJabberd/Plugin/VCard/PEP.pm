@@ -37,7 +37,7 @@ sub register {
 		    DJabberd::XMLElement->new(undef, 'photo', {}, [$meta{id}]),
 		]));
 	}
-	$cb->done();
+	$cb->decline();
     });
     $self->SUPER::register($vhost);
 }
@@ -59,23 +59,15 @@ sub pepper {
 sub load_meta {
     my ($self, $user) = @_;
     return () unless($self->pepper);
-    my $vm_ev = $self->{pep}->get_pub_last($user, AVAMD);
-    if($vm_ev) {
+    my ($vmi) = $self->{pep}->get_pub_last($user, AVAMD, undef, 1);
+    if($vmi) {
 	my %info;
-	my ($evt) = grep{$_->element eq '{'.DJabberd::Plugin::PEP::PUBSUBNS.'#event}event'}$vm_ev->children_elements;
-	$logger->debug("Retrieved MD item: ".$evt->as_xml);
+	$logger->debug("Retrieved MD item: ".$vmi->{data});
 
-	if(@{$evt->first_element->first_element->{children}}) {
-	    # Payload is not serialized, just take it: event / items / item / metadata / info
-	    my ($info) = grep{$_->element_name eq 'info' && $_->attr('{}type') eq 'image/png'}$evt->first_element->first_element->first_element->children_elements;
-	    %info = ( id => $info->attr('{}id'), bytes => $info->attr('{}bytes') )
-		    if($info);
-	} else {
-	    # This looks stupid (serialize in pep, deserialize here) but it has its merrits
+	if($vmi->{data}) {
 	    my $meta;
-	    my $mraw = $evt->first_element->first_element->innards_as_xml; # event/items/item/raw
 	    eval {
-	        ($meta) = grep{$_->nodeName eq 'info' && $_->{type} eq 'image/png'}$self->{xp}->parse_balanced_chunk($mraw)->firstChild->childNodes;
+	        ($meta) = grep{$_->nodeName eq 'info' && $_->{type} eq 'image/png'}$self->{xp}->parse_balanced_chunk($vmi->{data})->firstChild->childNodes;
 	    };
 	    %info = map{($_->nodeName => $_->value)}$meta->attributes if($meta);
 	}
@@ -86,29 +78,28 @@ sub load_meta {
 
 sub load_vcard {
     my ($self, $user, $cb) = @_;
-    # PEP is supposed to be inMemory so far
-    # I mean - no reason to go async right now
+    # Since we're only fetching 'last' no reason to go async as it's always in-memory
     $logger->info("Loading VCard from PEP");
     if($self->pepper) {
 	my %info = $self->load_meta($user);
 	if(%info) {
-	    my $vd_ev = $self->{pep}->get_pub_last($user, AVABD);
-	    unless($vd_ev) {
+	    my $vdi = $self->{pep}->get_pub_last($user, AVABD, $info{id}, 1);
+	    unless($vdi) {
 		$logger->debug("No data or usable metadata found");
 		return $cb->();
 	    }
-	    my ($evt) = grep{$_->element eq '{'.DJabberd::Plugin::PEP::PUBSUBNS.'#event}event'}$vd_ev->children_elements;
-	    my $draw = $evt->first_element->first_element->innards_as_xml; # event/items/item/raw
 	    my $data;
-	    if($draw) {
+	    if($vdi->{data}) {
 		eval {
-	           ($data) = grep{$_->nodeName eq 'data' && $_->{xmlns} eq AVABD}$self->{xp}->parse_balanced_chunk($draw)->firstChild;
+	           ($data) = grep{$_->nodeName eq 'data' && $_->{xmlns} eq AVABD}$self->{xp}->parse_balanced_chunk($vdi->{data})->firstChild;
 	    	};
 	    }
 	    if(ref($data)) {
 		my $vcard = DJabberd::XMLElement->new('vcard-temp', 'vCard', {'{}xmlns'=>'vcard-temp'}, [
-			DJabberd::XMLElement->new(undef,'TYPE',{},[$info{type}]),
-			DJabberd::XMLElement->new(undef,'BINVAL',{},[$data->textContent]),
+			DJabberd::XMLElement->new(undef, 'PHOTO', {}, [
+			    DJabberd::XMLElement->new(undef,'TYPE',{},[],$info{type}),
+			    DJabberd::XMLElement->new(undef,'BINVAL',{},[],$data->textContent),
+			])
 		    ]);
 		return $cb->($vcard->as_xml);
 	    }
@@ -131,18 +122,23 @@ sub store_vcard {
 		my $bin = MIME::Base64::decode($data);
 		my $bytes = length($bin);
 		my $digest = Digest::SHA::sha1_hex($bin);
-		$logger->debug("We've just got avatar: $type; $data");
+		$logger->debug("We've just got avatar: $type; $bytes");
 		# First comes the data, it's normally not broadcasted, fetched on demand
-		my $item = DJabberd::XMLElement->new(DJabberd::Plugin::PEP::PUBSUBNS, 'item', {
-		    '{}xmlns' => DJabberd::Plugin::PEP::PUBSUBNS,
+		my $item = DJabberd::XMLElement->new(undef, 'item', {
 		    '{}id' => $digest,
 		},[
 		    DJabberd::XMLElement->new(AVABD, 'data', {'{}xmlns' => AVABD }, [], $data)
 		]);
+		my $cfg = $self->{pep}->get_pub_cfg($user, AVABD);
+		if(!$cfg) {
+		    $self->{pep}->set_pub($user, AVABD);
+		    $self->{pep}->set_pub_cfg($user, AVABD, {persist_items => 1, max => 10});
+		} elsif(!$cfg->{persist_items} || $cfg->{max} < 10) {
+		    $self->{pep}->set_pub_cfg($user, AVABD, {persist_items => 1, max => 10});
+		}
 		$self->{pep}->publish($user, AVABD, $item);
 		# Now comes metadata, this is normally broadcasted to all subscribers
-		$item = DJabberd::XMLElement->new(DJabberd::Plugin::PEP::PUBSUBNS, 'item', {
-		    '{}xmlns' => DJabberd::Plugin::PEP::PUBSUBNS,
+		$item = DJabberd::XMLElement->new(undef, 'item', {
 		    '{}id' => $digest,
 		},[
 		    DJabberd::XMLElement->new(AVAMD, 'metadata', { '{}xmlns'=> AVAMD },
@@ -155,6 +151,13 @@ sub store_vcard {
 			    },[])
 		    ])
 		]);
+		$cfg = $self->{pep}->get_pub_cfg($user, AVAMD);
+		if(!$cfg) {
+		    $self->{pep}->set_pub($user, AVAMD);
+		    $self->{pep}->set_pub_cfg($user, AVAMD, {persist_items => 1, max => 10});
+		} elsif(!$cfg->{persist_items} || $cfg->{max} < 10) {
+		    $self->{pep}->set_pub_cfg($user, AVAMD, {persist_items => 1, max => 10});
+		}
 		$self->{pep}->publish($user, AVAMD, $item);
 	    }
 	}
