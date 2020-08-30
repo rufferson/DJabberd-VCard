@@ -31,7 +31,9 @@ sub run_tests {
         $pa->login;
         $pb->login;
         $pa->send_xml("<presence/>");
+	$pa->recv_xml; # Eat own pres
         $pb->send_xml("<presence/>");
+	$pb->recv_xml; # Eat own pres
 
         my $e_pa_res = DJabberd::Util::exml($pa->resource);
         my $e_pb_res = DJabberd::Util::exml($pb->resource);
