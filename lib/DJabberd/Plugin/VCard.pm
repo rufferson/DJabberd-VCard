@@ -3,7 +3,7 @@ use strict;
 use base 'DJabberd::Plugin';
 use warnings;
 
-our $VERSION = '0.50'; 
+our $VERSION = '0.60'; 
 
 our $logger = DJabberd::Log->get_logger();
 
